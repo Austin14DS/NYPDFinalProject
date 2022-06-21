@@ -1,0 +1,265 @@
+---
+title: "NYPD Shooting Incident Data (Historic)"
+author: "Austin Marinez"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Libraries Required
+
+```{r setup, include=TRUE}
+library(tidyverse)
+library(lubridate)
+```
+
+# Source
+
+We used https://catalog.data.gov/dataset and found the data set titled "NYPD Shooting Incident Data (Historic)". 
+
+We downloaded the csv file, which can be downloaded through the following link: https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD.
+
+More information about the data collected can be found at https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8.
+
+Now that we found our data, we first read it in.
+
+# Read In and Clean Up
+```{r readIn,echo=TRUE}
+  nypd_data <- read_csv('https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD')
+
+#summary before cleaning
+summary(nypd_data)
+
+```
+
+Next, we make the following changes to clean up the data.
+
+1. From looking at the summary there are many overlapping categories. UNKNOWN, U, and NA all overlap. There also seem to be some errors entered in the PERP_AGE_GROUP column. We first change these all to NA. 
+2. We remove columns that are not pertinent to our analysis.
+3. We rename some columns for usability.
+4. We change the data type of the PRECINCT column to ensure it uses factors rather than integers.
+5. We change the data type of the DATE column to ensure it is considered a column of dates.
+6. We change the data type of the character columns to factor as we are interested in categories.
+
+```{r clean,echo=TRUE}
+#1a entry check
+cat_PAG <- unique(nypd_data$PERP_AGE_GROUP) 
+cat_PAG
+
+#1b NA change
+nypd_data[nypd_data == "UNKNOWN" | nypd_data == "1020" | nypd_data == "940"  | nypd_data == "224" | nypd_data == "U"] <- NA
+
+#2 column removal
+  nypd_data_rem <- select(nypd_data, -c(INCIDENT_KEY,JURISDICTION_CODE,LOCATION_DESC,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat))
+
+
+#3 column renaming
+nypd_data_rename <- rename(nypd_data_rem, DATE=OCCUR_DATE,TIME=OCCUR_TIME,BOROUGH=BORO,MURDER=STATISTICAL_MURDER_FLAG)
+
+
+#4 precinct as factor change
+nypd_data_rename$PRECINCT <- as.factor(nypd_data_rename$PRECINCT)
+
+
+#5 date formatting
+nypd_data_rename$DATE <- mdy(nypd_data_rename$DATE)
+
+
+#6 character as factor changes
+nypd_data_fac <- nypd_data_rename %>%
+  mutate_if(is.character,as.factor)
+
+nypd_data_fac
+
+
+#summary after cleaning
+
+summary(nypd_data_fac)
+```
+
+# Visualization and Analysis
+
+With this data, we set out to observe and analyze trends of shootings in different boroughs over time. In addition to this, we will analyze the number of unknown perpetrators in each borough as well as focus on Manhattan to create a mathematical model unique to our Manhattan data. 
+
+The choices for our analysis came about from a few questions.  
+First was to look at the number of shootings with respect to location. Did every location follow similar trends?   
+The next variable of interest is unknown perpetrators. Fluctuation in unknown perpetrators could be indicative of police efficiency. Did the police maintain the same efficiency in catching perpetrators or was there some change?  
+Due to the constraints on this project, we focused on Manhattan, but looking at every borough would have been of interest.  
+Lastly, how accurate is our Manhattan model? What conclusion or insight can we draw from our model?
+
+## Number of Shootings Per Borough by Year
+
+The following data and graph take a look at the number of shootings in each borough over the years.
+
+```{r boro, echo=TRUE}
+
+#piping data to focus on date and borough
+
+boroData <- nypd_data_fac %>%
+    pivot_longer(BOROUGH) %>%
+    count(DATE,value) %>%
+    pivot_wider(names_from = value, values_from = n, values_fill = list(n=0))
+
+boroData
+
+
+#flooring data to go by year instead of by day
+
+boroData2 <- boroData %>%
+  group_by(YEAR = floor_date(DATE,"year")) %>%
+  summarize(bronx_yt=sum(BRONX), brooklyn_yt=sum(BROOKLYN), manhattan_yt=sum(MANHATTAN), queens_yt=sum(QUEENS), staten_island_yt=sum(`STATEN ISLAND`))
+  
+boroData2
+
+
+#plotting our piped data
+
+plot(boroData2$YEAR, boroData2$bronx_yt, type="l", col=1, ylim=c(0,1000), xlab="Year", ylab="Number of Shootings", main="Shootings By Year")
+lines(boroData2$YEAR, boroData2$brooklyn_yt, type="l", col=2)
+lines(boroData2$YEAR, boroData2$manhattan_yt, type="l", col=3)
+lines(boroData2$YEAR, boroData2$queens_yt, type="l", col=4)
+lines(boroData2$YEAR, boroData2$staten_island_yt, type="l", col=5)
+legend("top", legend=c('BRONX', 'BROOKLYN', 'MANHATTAN', 'QUEENS', 'STATEN ISLAND'), col=c(1:5),lwd=1,lty=c(1,1,1,1,1), cex=.5)
+
+
+```
+
+**Figure 1**   
+
+In **Figure 1** we see the number of shootings each year for each borough of New York City. Note, that just because some boroughs have higher numbers it does not mean that shootings are more likely in them. Our NYPD data set did not include population data. Hence, this is frequency and not rate. What does stand out is that there was a decreasing trend up until 2018 and 2019 in nearly all boroughs.
+
+After 2019, there was a dramatic increase in shootings for each borough. Some may assume this is due to a population increase, but the populations in each borough increased prior to 2018 while still maintaining a decrease in shootings. Note that according to census records, every borough increased in population up until 2020. It appears likely that there is some other cause. The pandemic may have indirectly affected these numbers. Impacts on people financially may have led to an increase in crime as a whole.
+
+## Number of Unknown Perpetrators Per Borough by Year
+
+The following data and graph take a look at the number of shootings in each borough over the years where the perpetrator is unknown. There are many categories which could be unknown about a perpetrator. We based the number of unknown perpetrators off the number of unknown age groups. This was chosen because age group had the highest unknown numbers when compared to sex and race. This could be due to age being harder to guess or describe compared to sex and race. 
+
+
+
+```{r na_data, echo=TRUE}
+
+
+#piping data to focus on date, age group, and borough
+
+age_Data <- nypd_data_fac %>%
+    pivot_longer(BOROUGH) %>%
+    count(DATE,PERP_AGE_GROUP,value) %>%
+    pivot_wider(names_from = value, values_from = n, values_fill = list(n=0))
+
+age_Data
+
+
+#subset of data to focus only on unknown perpetrator according to age group
+
+na_Data <- subset(age_Data, (PERP_AGE_GROUP %in% c(NA)))
+
+na_Data
+
+
+#flooring data to go by year instead of by day
+
+na_Data2 <- na_Data %>%
+  group_by(YEAR = floor_date(DATE,"year")) %>%
+  summarize(bronx_nat=sum(BRONX), brooklyn_nat=sum(BROOKLYN), manhattan_nat=sum(MANHATTAN), queens_nat=sum(QUEENS), staten_island_nat=sum(`STATEN ISLAND`))
+
+na_Data2
+
+
+#plotting our piped data
+
+plot(na_Data2$YEAR, na_Data2$bronx_nat, type="l", col=1, ylim=c(0,600), xlab="Year", ylab="Number of Unknown Perpetrators", main="Unknown Perpetrators By Year")
+lines(na_Data2$YEAR,na_Data2$brooklyn_nat, type="l", col=2)
+lines(na_Data2$YEAR, na_Data2$manhattan_nat, type="l", col=3)
+lines(na_Data2$YEAR, na_Data2$queens_nat, type="l", col=4)
+lines(na_Data2$YEAR, na_Data2$staten_island_nat, type="l", col=5)
+legend("top", legend=c('BRONX', 'BROOKLYN', 'MANHATTAN', 'QUEENS', 'STATEN ISLAND'), col=c(1:5),lwd=1,lty=c(1,1,1,1,1), cex=.5)
+```
+
+**Figure 2**   
+
+In **Figure 2**, which focuses on unknown perpetrator numbers, we see a very similar trend to **Figure 1**. This is not surprising as it is reasonable that unknown perpetrator numbers increase as shootings increase. We explore this further in Manhattan specifically.
+
+## Focusing on Manhattan Data
+
+For the purpose of this project, we choose to focus on Manhattan or else the project would become extremely long and have too many visuals. Manhattan was chosen because it appears to have an interesting trend. In 2021, Manhattan had more shootings than Queens for the first time in 15 years according to our data. Despite this, Manhattan had less unknown perpetrators than Queens in 2021.
+
+```{r man_mod, echo=TRUE}
+
+#plotting total numbers and unknown perpetrator numbers in Manhattan
+
+plot(na_Data2$YEAR, na_Data2$manhattan_nat, type="l", col=1, ylim=c(0,400), xlab="Year", ylab="Number of Shootings", main="Manhattan Shootings by Year")
+lines(boroData2$YEAR, boroData2$manhattan_yt, type="l", col=3)
+legend("top", legend=c('Total', 'Unknown Perpetrator'), col=c(3,1),lwd=1,lty=c(1,1), cex=1)
+
+```
+
+**Figure 3**
+
+## Manhattan Model
+
+Next, we create a smaller data set narrowing down our data on Manhattan. It includes total shootings and unknown perpetrators. We then create a linear model of unknown perpetrators as a function of total shootings. From there we add a prediction column based off our model. 
+
+
+```{r model, echo=TRUE}
+
+#creating a smaller data set focused on only Manhattan
+
+man_modData <- data.frame(na_Data2$manhattan_nat,boroData2$manhattan_yt)
+man_modData
+
+
+#linear model of unknown perpetrator numbers as a function of total number of shootings
+
+man_mod <- lm(man_modData[,1]~man_modData[,2], man_modData)
+summary(man_mod)
+
+
+#adding a prediction column based off our data
+#renaming columns for readability4
+
+man_mod2 <- man_modData %>%
+              mutate(Prediction = round(predict(man_mod))) %>%
+              rename_with(~c('Unknown', 'Total'), 1:2)
+
+man_mod2
+
+
+#plot of our prediction model and observed numbers
+
+man_mod2 %>% ggplot()+
+  geom_point(aes(x=man_mod2[,2],y=man_mod2[,3]),color = "red")+
+  geom_line(aes(x=man_mod2[,2],y=man_mod2[,3]),color = "red")+
+  geom_point(aes(x=man_mod2[,2],y=man_mod2[,1]),color = "blue")+
+  labs(title="Unknown Perpetrators", subtitle= "As a Function of Total Shootings", x= "Total Shootings", y= "Unknown Perpetrators", color="Legend")+
+  scale_color_manual(values=colors)
+
+```
+ 
+**Figure 4**   
+
+**Figure 3** shows the trend of both total shootings and unknown perpetrator shootings in Manhattan. From the data used in this figure, we created a linear model shown in **Figure 4**. Our model's prediction and our observed data were reasonably close, with slight overestimates and underestimates. Something of note is that the number of unknown perpetrators was lower than our model's prediction for our highest number of shootings. This means even though shootings went up in 2021, the number of unknown perpetrators was lower than expected.
+
+
+# Conclusion and References
+
+According to a New York Times article, the NYPD and the Mayor's office addressed the increase in shootings. They acknowledged the increase in shootings, but also mentioned a decrease in murders. They credited this to a dramatic increase in arrests. While we did not analyze murder numbers, our data from **Figure 4** supports this. Fewer unknown perpetrators means that the police have been arresting more perpetrators. 
+
+The following news article was used in our analysis:
+
+"Shootings Rise in New York, Coloring Perceptions of City’s Safety"   
+New York Times Article: https://www.nytimes.com/2022/04/06/nyregion/shootings-new-york-city-safety.html
+
+
+# Bias
+
+In this section we mention possible sources of bias.
+
+First, with the current controversies involving the police in the news, one may view the police negatively or positively. I tried to remain neutral and let the data speak for itself. Second, choosing to compare boroughs rather than precincts was out of convenience. Precinct comparison may have provided more insight on what made a difference over the years. This would require a small subset of the data since there are a large amount of precincts. Third, choosing Manhattan because of the trends we found may have led us to less impactful conclusions than the other boroughs.
+
+
+## Session Info
+```{r ending, echo=FALSE}
+sessionInfo()
+
+```
